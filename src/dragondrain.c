@@ -523,6 +523,16 @@ static void process_packet(struct state *state, unsigned char *buf, int len)
 	}
 }
 
+static int sniff_receive(struct state *state) {
+    unsigned char buf[2048];
+    int len;
+    struct rx_info ri;
+    len = wi_read(state->sniff_wi, buf, sizeof(buf), &ri);
+    if (len < 0) return -1;
+    process_sniffed_packet(state, buf, len);
+    return len;
+}
+
 static int card_receive(struct state *state)
 {
 	unsigned char buf[2048];
@@ -1007,14 +1017,4 @@ static void process_sniffed_packet(struct state *state, unsigned char *buf, int 
             state->rx_commits_ring[state->rx_commits_idx]++;
         }
     }
-}
-
-static int sniff_receive(struct state *state) {
-    unsigned char buf[2048];
-    int len;
-    struct rx_info ri;
-    len = wi_read(state->sniff_wi, buf, sizeof(buf), &ri);
-    if (len < 0) return -1;
-    process_sniffed_packet(state, buf, len);
-    return len;
 }
