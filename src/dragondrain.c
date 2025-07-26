@@ -523,6 +523,35 @@ static void process_packet(struct state *state, unsigned char *buf, int len)
 	}
 }
 
+static void process_sniffed_packet(struct state *state, unsigned char *buf, int len) {
+    int pos_bssid, pos_src, pos_dst;
+    if (buf[1] & 0x08) return;
+
+    switch (buf[1] & 3) {
+        case 0: pos_bssid = 16; pos_src = 10; pos_dst = 4; break;
+        case 1: pos_bssid = 4;  pos_src = 10; pos_dst = 16; break;
+        case 2: pos_bssid = 10; pos_src = 16; pos_dst = 4; break;
+        default: pos_bssid = 10; pos_src = 24; pos_dst = 16; break;
+    }
+
+    if (memcmp(buf + pos_bssid, state->bssid, 6) != 0) return;
+
+    unsigned char *dst = buf + pos_dst;
+    if (memcmp(dst, state->srcaddr, 5) != 0) return;
+    if (dst[5] >= state->numclients) return;
+
+    if (len > 32 && buf[0] == 0xb0 && buf[24] == 0x03 && buf[26] == 0x01) {
+        if (buf[28] == 0x4C) {
+            unsigned char *token = buf + 32;
+            int token_len = len - 32;
+            state->rx_clogging_token++;
+            inject_sae_commit(state, dst, token, token_len);
+        } else if (buf[28] == 0x00) {
+            state->rx_commits_ring[state->rx_commits_idx]++;
+        }
+    }
+}
+
 static int sniff_receive(struct state *state) {
     unsigned char buf[2048];
     int len;
@@ -988,33 +1017,4 @@ int main(int argc, char * argv[])
 
 	event_loop(state, device, chan, sniff_device);
 	exit(0);
-}
-
-static void process_sniffed_packet(struct state *state, unsigned char *buf, int len) {
-    int pos_bssid, pos_src, pos_dst;
-    if (buf[1] & 0x08) return;
-
-    switch (buf[1] & 3) {
-        case 0: pos_bssid = 16; pos_src = 10; pos_dst = 4; break;
-        case 1: pos_bssid = 4;  pos_src = 10; pos_dst = 16; break;
-        case 2: pos_bssid = 10; pos_src = 16; pos_dst = 4; break;
-        default: pos_bssid = 10; pos_src = 24; pos_dst = 16; break;
-    }
-
-    if (memcmp(buf + pos_bssid, state->bssid, 6) != 0) return;
-
-    unsigned char *dst = buf + pos_dst;
-    if (memcmp(dst, state->srcaddr, 5) != 0) return;
-    if (dst[5] >= state->numclients) return;
-
-    if (len > 32 && buf[0] == 0xb0 && buf[24] == 0x03 && buf[26] == 0x01) {
-        if (buf[28] == 0x4C) {
-            unsigned char *token = buf + 32;
-            int token_len = len - 32;
-            state->rx_clogging_token++;
-            inject_sae_commit(state, dst, token, token_len);
-        } else if (buf[28] == 0x00) {
-            state->rx_commits_ring[state->rx_commits_idx]++;
-        }
-    }
 }
