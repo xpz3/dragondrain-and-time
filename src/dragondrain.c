@@ -1,7 +1,7 @@
 // TODO: - Implement the different strategies on whether a new element/scalar
 //         is generated or not. This can then be used to carry out simplified
 //	   clogging attacks from extremely low-resource devices.
-// TODO: - Add option to switch between groups to bypass new hostap defense.
+// TODO: - Add option to switch between groups to bypass new hostap defense.hostapd_file
 // TODO: - Refine timing of attacking hostapd's queuing so client can't get in between
 // TODO: - Scan the beacon frame to see if the AP supports SAE or not.
 // TODO: - Add explanation on numclients to the readme
@@ -214,7 +214,7 @@ static int int_to_bitrate(int rate)
  */
 static int card_set_rate_workaround(struct state *state, int rate)
 {
-	char interface[MAX_IFACE_NAME];
+	/*char interface[MAX_IFACE_NAME];
 
 	// Copy interface name, and close the interface
 	strcpy(interface, state->wi->wi_interface);
@@ -231,7 +231,7 @@ static int card_set_rate_workaround(struct state *state, int rate)
 	{
 		fprintf(stderr, "Failed to set bitrate to %d using workaround method\n", rate);
 		return 1;
-	}
+	}*/
 
 	// Open interface again
 	state->wi = wi_open(interface);
