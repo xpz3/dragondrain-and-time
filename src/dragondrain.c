@@ -214,13 +214,13 @@ static int int_to_bitrate(int rate)
  */
 static int card_set_rate_workaround(struct state *state, int rate)
 {
-	/*char interface[MAX_IFACE_NAME];
+	char interface[MAX_IFACE_NAME];
 
 	// Copy interface name, and close the interface
 	strcpy(interface, state->wi->wi_interface);
 	wi_close(state->wi);
 
-	// Easiest is to just call ifconfig and iw
+	/*// Easiest is to just call ifconfig and iw
 	if (vsystem("ifconfig %s down", interface) ||
 	    vsystem("iw %s set type managed", interface) ||
 	    vsystem("ifconfig %s up", interface) ||
