@@ -96,6 +96,7 @@ static struct state
 	int inject_malformed;
 
 	/** Various variables */
+	bool use_workaround = false;
 	bool started_clogging;
 	int nextaddr;
 	int time_fd_inject;
@@ -220,22 +221,25 @@ static int card_set_rate_workaround(struct state *state, int rate)
 	strcpy(interface, state->wi->wi_interface);
 	wi_close(state->wi);
 
-	// Easiest is to just call ifconfig and iw
-	if (vsystem("ifconfig %s down", interface) ||
-	    vsystem("iw %s set type managed", interface) ||
-	    vsystem("ifconfig %s up", interface) ||
-	    vsystem("iw %s set bitrates legacy-2.4 %d", interface, rate) ||
-	    vsystem("ifconfig %s down", interface) ||
-	    vsystem("iw %s set type monitor", interface) ||
-	    vsystem("ifconfig %s up", interface))
+	if (state->use_workaround)
 	{
-		fprintf(stderr, "Failed to set bitrate to %d using workaround method\n", rate);
-		return 1;
+		// Easiest is to just call ifconfig and iw
+		if (vsystem("ifconfig %s down", interface) ||
+			vsystem("iw %s set type managed", interface) ||
+			vsystem("ifconfig %s up", interface) ||
+			vsystem("iw %s set bitrates legacy-2.4 %d", interface, rate) ||
+			vsystem("ifconfig %s down", interface) ||
+			vsystem("iw %s set type monitor", interface) ||
+			vsystem("ifconfig %s up", interface))
+		{
+			fprintf(stderr, "Failed to set bitrate to %d using workaround method\n", rate);
+			return 1;
+		}
 	}
-
+	
 	// Open interface again
 	state->wi = wi_open(interface);
-
+	
 	return 0;
 }
 
@@ -698,6 +702,7 @@ static void usage(char * p)
 		   "       -m         : Inject a malfored Commit after every spoofed one\n"
 		   "       -M         : Detect and abuse hostapd's queuing behaviour\n"
 		   "       -f         : Don't scan for the AP\n"
+		   "       -w         : Use bitrate workaround using ifconfig and iw for ath9k based cards\n"
 		   "\n",
 		   version_info);
 	free(version_info);
@@ -815,7 +820,7 @@ int main(int argc, char * argv[])
 	state->frames_per_burst = 1;
 	state->numclients = 256;
 
-	while ((ch = getopt(argc, argv, "d:v:c:a:g:r:b:n:i:mM:hf")) != -1)
+	while ((ch = getopt(argc, argv, "d:v:c:a:g:r:b:n:i:mM:whf")) != -1)
 	{
 		switch (ch)
 		{
@@ -902,6 +907,10 @@ int main(int argc, char * argv[])
 
 			case 'f':
 				state->force_attack = 1;
+				break;
+
+			case 'w':
+				state->use_workaround = true;
 				break;
 
 			case 'h':
